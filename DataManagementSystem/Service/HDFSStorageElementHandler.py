@@ -35,7 +35,7 @@ import pydoop
 import pydoop.hdfs as hdfs
 # # from DIRAC
 from DIRAC import gLogger, S_OK, S_ERROR, gConfig
-from DIRAC.Core.DISET.RequestHandler import RequestHandler
+from DIRAC.Core.DISET.RequestHandler import RequestHandler, getServiceOption
 from DIRAC.ConfigurationSystem.Client.Helpers.Registry import getVOForGroup
 
 HDFS_HOST = None
@@ -57,6 +57,13 @@ def initializeHDFSStorageElementHandler( serviceInfo ):
   global HDFS_RESOURCE
 
   cfgPath = serviceInfo['serviceSectionPath']
+
+  BASE_PATH = getServiceOption( serviceInfo, "BasePath", BASE_PATH )
+  if not BASE_PATH:
+    gLogger.error( 'Failed to get the base path' )
+    return S_ERROR( 'Failed to get the base path' )
+  if not os.path.exists( BASE_PATH ):
+    os.makedirs( BASE_PATH )
 
   HDFS_HOST = gConfig.getValue( "%s/HDFSServer" % cfgPath , HDFS_HOST )
   if not HDFS_HOST:
@@ -83,8 +90,69 @@ class HDFSStorageElementHandler( RequestHandler ):
   '''
   classdocs
   '''
-  def __HDFSClient( self ):
+  
+  def __init__(self):
 
-    hdfs_ctx = hdfs.hdfs( HDFS_HOST, HDFS_PORT )
+    self.log = gLogger.getSubLogger( "HDFSStorageElementHandler", True )
+
+    try:
+      self.hdfs_ctx = hdfs.hdfs( HDFS_HOST, HDFS_PORT )
+    except:
+      errStr = 'HDFSStorageElementHandler.__init__: failed to initialize a HDFS instance.'
+      self.log.debug( errStr )
+
+  def __del__(self):
+    try:
+      self.hdfs_ctx.close()
+    except Exception, e:
+      errStr = 'HDFSStorageElementHandler.__del__: failed to close HDFS instance. Error: %s' % e
+      self.log.debug( errStr )
+        
+
+  # ## TODO: just copied from StorageElementHandler, probably needs adjustment
+  def __resolveFileID( self, fileID ):
+    """ get path to file for a given :fileID: """
+
+    port = self.getCSOption( 'Port', '' )
+    if not port:
+      return ''
+
+    if ":%s" % port in fileID:
+      loc = fileID.find( ":%s" % port )
+      if loc >= 0:
+        fileID = fileID[loc + len( ":%s" % port ):]
+
+    serviceName = self.serviceInfoDict['serviceName']
+    loc = fileID.find( serviceName )
+    if loc >= 0:
+      fileID = fileID[loc + len( serviceName ):]
+
+    loc = fileID.find( '?=' )
+    if loc >= 0:
+      fileID = fileID[loc + 2:]
+
+    if fileID.find( BASE_PATH ) == 0:
+      return fileID
+    while fileID and fileID[0] == '/':
+      fileID = fileID[1:]
+    return os.path.join( BASE_PATH, fileID )
 
 
+
+  def export_exists( self, fileID ):
+    """ Check existence of the fileID """
+
+    file_path = self.__resolveFileID( fileID )
+    gLogger.debug( "HDFSStorageElementHandler.export_exists: checking if %s exists" % file_path )
+
+    try:
+      res = self.hdfs_ctx.exists( file_path )
+      if res:
+        return S_OK( True )
+      else:
+        return S_OK( False )
+      
+    except Exception, e:
+      errStr = 'HDFSStorageElementHandler.export_exists: Error while checking for existence: %s' % e
+      self.log.debug( errStr )
+      
