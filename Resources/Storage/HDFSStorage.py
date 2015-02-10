@@ -105,4 +105,163 @@ class HDFSStorage( StorageBase ):
       errStr = 'HDFSStorage.__singleExists: error while checking for existence %s' % e
       return S_ERROR( errStr )
       
+
+  #############################################################
+  #
+  # These are the methods for file manipulation
+  #
+
+  def isFile( self, path ):
+    """Check if the given path exists and it is a file
+
+    :param self: self reference
+    :param str: path or list of paths to be checked ('hdfs://...')
+    :returns Failed dict: {path : error message}
+             Successful dict: {path : bool}
+             S_ERROR in case of argument problems
+    """
+
+    res = checkArgumentFormat( path )
+    if not res['OK']:
+      return res
+    urls = res['Value']
+
+    self.log.debug( "HDFSStorage.isFile: checking %s path(s) if they are file(s) or not" % len( urls ) )
+
+    successful = {}
+    failed = {}
+
+    for url in urls:
+      res = self.__isSingleFile( url )
+
+      if res['OK']:
+        successful[url] = res['Value']
+      else:
+        failed[url] = res['Message']
+
+    return S_OK( {'Failed' : failed, 'Successful' : successful} )
+
+  def __isSingleFile( self, path ):
+    """ Checks for a single path if it exists and if it's a file
+
+    :param self: self reference
+    :param str: path to be checked
+    :returns S_ERROR in case of an error
+             S_OK( bool ) if it is a file or not
+    """
+
+    self.log.debug( "HDFSStorage.__isSingleFile: checking if %s is a file or not" % path )
+    
+    try:
+      # lsl returns a list of dictionaries. since we only check for one file. the first entry
+      # is the metadata dict we are interested int
+      res = hdfs.lsl( path )
+      if res[0]['kind'] == 'file':
+        return S_OK( True )
+      else:
+        return S_OK( False )
+    except Exception, e:
+      if 'No such file' in str( e ):
+        errStr = "HDFSStorage.__isSingleFile: File does not exist."
+        self.log.debug( errStr )
+        S_ERROR( errStr )
+      else:
+        errStr = "HDFSStorage.__isSingleFile: error while retrieving path properties %s" % e
+        self.log.error( errStr )
+        return S_ERROR( errStr )
+
+
+  def getFile( self, *parms, **kws ):
+    """Get a local copy of the file specified by its path
+    """
+    return S_ERROR( "Storage.getFile: implement me!" )
+
+  def putFile( self, *parms, **kws ):
+    """Put a copy of the local file to the current directory on the
+       physical storage
+    """
+    return S_ERROR( "Storage.putFile: implement me!" )
+
+  def removeFile( self, *parms, **kws ):
+    """Remove physically the file specified by its path
+    """
+    return S_ERROR( "Storage.removeFile: implement me!" )
+
+  def getFileMetadata( self, *parms, **kws ):
+    """  Get metadata associated to the file
+    """
+    return S_ERROR( "Storage.getFileMetadata: implement me!" )
+
+  def getFileSize( self, *parms, **kws ):
+    """Get the physical size of the given file
+    """
+    return S_ERROR( "Storage.getFileSize: implement me!" )
+
+  def prestageFile( self, *parms, **kws ):
+    """ Issue prestage request for file
+    """
+    return S_ERROR( "Storage.prestageFile: implement me!" )
+
+  def prestageFileStatus( self, *parms, **kws ):
+    """ Obtain the status of the prestage request
+    """
+    return S_ERROR( "Storage.prestageFileStatus: implement me!" )
+
+  def pinFile( self, *parms, **kws ):
+    """ Pin the file on the destination storage element
+    """
+    return S_ERROR( "Storage.pinFile: implement me!" )
+
+  def releaseFile( self, *parms, **kws ):
+    """ Release the file on the destination storage element
+    """
+    return S_ERROR( "Storage.releaseFile: implement me!" )
+
+  #############################################################
+  #
+  # These are the methods for directory manipulation
+  #
+
+  def isDirectory( self, *parms, **kws ):
+    """Check if the given path exists and it is a directory
+    """
+    return S_ERROR( "Storage.isDirectory: implement me!" )
+
+  def getDirectory( self, *parms, **kws ):
+    """Get locally a directory from the physical storage together with all its
+       files and subdirectories.
+    """
+    return S_ERROR( "Storage.getDirectory: implement me!" )
+
+  def putDirectory( self, *parms, **kws ):
+    """Put a local directory to the physical storage together with all its
+       files and subdirectories.
+    """
+    return S_ERROR( "Storage.putDirectory: implement me!" )
+
+  def createDirectory( self, *parms, **kws ):
+    """ Make a new directory on the physical storage
+    """
+    return S_ERROR( "Storage.createDirectory: implement me!" )
+
+  def removeDirectory( self, *parms, **kws ):
+    """Remove a directory on the physical storage together with all its files and
+       subdirectories.
+    """
+    return S_ERROR( "Storage.removeDirectory: implement me!" )
+
+  def listDirectory( self, *parms, **kws ):
+    """ List the supplied path
+    """
+    return S_ERROR( "Storage.listDirectory: implement me!" )
+
+  def getDirectoryMetadata( self, *parms, **kws ):
+    """ Get the metadata for the directory
+    """
+    return S_ERROR( "Storage.getDirectoryMetadata: implement me!" )
+
+  def getDirectorySize( self, *parms, **kws ):
+    """ Get the size of the directory on the storage
+    """
+    return S_ERROR( "Storage.getDirectorySize: implement me!" )
       
