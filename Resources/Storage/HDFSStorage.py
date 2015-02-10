@@ -171,8 +171,13 @@ class HDFSStorage( StorageBase ):
         return S_ERROR( errStr )
 
 
-  def getFile( self, *parms, **kws ):
+  def getFile( self, path, localPath = False ):
     """Get a local copy of the file specified by its path
+
+    :param self: self reference
+    :param str path: path or list of paths on the storage
+    :returns Successful dict: {path : size}
+
     """
     return S_ERROR( "Storage.getFile: implement me!" )
 
@@ -192,10 +197,63 @@ class HDFSStorage( StorageBase ):
     """
     return S_ERROR( "Storage.getFileMetadata: implement me!" )
 
-  def getFileSize( self, *parms, **kws ):
+  def getFileSize( self, path ):
     """Get the physical size of the given file
+
+    :param self: self reference
+    :param str path: path of list of paths on the storage
+    :returns Successful dicht {path : size}
+             Failed dict {path : error message}
+             S_ERROR in case of argument problems
     """
-    return S_ERROR( "Storage.getFileSize: implement me!" )
+    res = checkArgumentFormat( path )
+    if not res['OK']:
+      return res
+    urls = res['Value']
+
+    self.log.debug( "HDFSStorage.getFileSize: Attempting to determine file size of %s files" % len( urls ) )
+
+    successful = {}
+    failed = {}
+
+    for url in urls:
+      res = self.__getSingeFileSize( url )
+      if res['OK']:
+        successful[url] = res['Value']
+      else:
+        failed[url] = res['Message']
+
+    return S_OK( { 'Failed' : failed, 'Successful' : successful} )
+
+
+  def __getSingeFileSize( self, path ):
+    """ Get physical file size for a single file on the storage
+
+    :param self: self reference
+    :param str path: path to the file
+    :returns S_OK( fileSize )
+             S_ERROR( error message ) when file size could not be determined
+    """
+
+    self.log.debug( "HDFSStorage.__getSingleFileSize: Determining size of file %s" % path )
+
+    res = self.__isSingleFile( path )
+    if not res['OK']:
+      return res
+
+    if not res['Value']:
+      errStr = "HDFSStorage.__getSingleFileSize: Path is not a file."
+      self.log.debug( errStr )
+      return S_ERROR( errStr )
+    else:
+      try:
+        statInfo = hdfs.lsl(path)
+        return S_OK( statInfo[0]['size'] )
+      except Exception, e:
+        errStr = "HDFSStorage.__getSingleFileSize: Failed to determine file size: %s" % e
+        self.log.error( errStr )
+        return S_ERROR( errStr )
+    pass
 
   def prestageFile( self, *parms, **kws ):
     """ Issue prestage request for file
