@@ -255,6 +255,15 @@ class HDFSStorage( StorageBase ):
       
     try:
       hdfs.cp( src_url, dest)
+    except IOError, e :
+      if 'Cannot open file' in str( e ):
+        errStr = "HDFSStorage.__getSingleFile: No access to create directory/file in destination."
+        self.log.error( errStr )
+        return S_ERROR( errStr )
+      else:
+        errStr = "HDFSStorage.__getSingleFile: IOError while trying to download file: %s" % e
+        self.log.error( errStr )
+        return S_ERROR( errStr )
     except Exception, e:
       errStr = "HDFSStorage.__getSingleFile: error while downloading file: %s" % e
       self.log.error( errStr )
