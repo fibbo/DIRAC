@@ -53,12 +53,31 @@ class HDFSStorage( StorageBase ):
       errStr = 'HDFSStorageElementHandler.__init__: failed to initialize a HDFS instance. Some operations might not work.'
       self.log.debug( errStr )
 
+
+
   def __del__( self ):
     try:
       self.hdfs_ctx.close()
     except Exception, e:
       errStr = 'HDFSStorage.__del__: failed to close HDFS instance. Error: %s' % e
       self.log.debug( errStr )
+
+
+  def __existsHelper( self, path ):
+    """ When pydoop tries an operation on a file that doesn't exist, the return ERROR is a general
+        IOError with no more information. So we have this helper that checks whether or not a path exists
+        so we at least know this.
+
+        :param str path: single path to check
+        :return bool: True if the path exists, False if not
+                S_ERROR( error message ) in case of an error
+    """
+    res = self.__singleExists( path )
+    if res['OK']:
+      return res['Value']
+    else:
+      return res
+
 
   def exists( self, path ):
     """ Check existence of the path
@@ -160,15 +179,20 @@ class HDFSStorage( StorageBase ):
         return S_OK( True )
       else:
         return S_OK( False )
-    except Exception, e:
+    except IOError, e:
       if 'No such file' in str( e ):
         errStr = "HDFSStorage.__isSingleFile: File does not exist."
         self.log.debug( errStr )
         S_ERROR( errStr )
       else:
-        errStr = "HDFSStorage.__isSingleFile: error while retrieving path properties %s" % e
+        errStr = "HDFSStorage.__isSingleFile: IOError while retrieving path properties %s" % e
         self.log.error( errStr )
         return S_ERROR( errStr )
+    except Exception, e:
+        errStr = "HDFSStorage.__isSingleFile: Exception caught while retrieving path properties %s" % e
+        self.log.error( errStr )
+        return S_ERROR( errStr )
+
 
 
   def getFile( self, path, localPath = False ):
@@ -177,9 +201,74 @@ class HDFSStorage( StorageBase ):
     :param self: self reference
     :param str path: path or list of paths on the storage
     :returns Successful dict: {path : size}
-
     """
-    return S_ERROR( "Storage.getFile: implement me!" )
+    res = checkArgumentFormat( path )
+    if not res['OK']:
+      return res
+    urls = res['Value']
+
+    self.log.debug( "HDFSStorage.getFile: Attempting to download %s file(s)." % len( urls ) )
+
+    successful = {}
+    failed = {}
+
+    for src_url in urls:
+      fileName = os.path.basename( src_url )
+      if localPath:
+        dest_file = '%s/%s' % ( localPath, fileName )
+      else:
+        dest_file = ( os.getcwd(), fileName )
+
+      res = self.__getSingleFile( src_url, dest_file )
+
+      if res['OK']:
+        successful[src_url] = res['Value']
+      else:
+        failed[src_url] = res['Message']
+
+    return S_OK( { 'Failed' : failed, 'Successful' : successful} )
+
+
+
+  def __getSingleFile( self, src_url, dest_file ):
+    """ Copy a file from storage to local file system
+
+    :param str src_url: url on the remote storage
+    :param str dest_file: destionation file name on the file system
+    :return S_ERROR( error message ) in case of an error
+            S_OK( file size ) if copying is successful
+    """
+
+    res = self.__getSingeFileSize( src_url )
+
+    if not res['OK']:
+      errStr = "HDFSStorage.__getSingleFile: Error while determinig file size: %s" % res['Message']
+      self.log.error( errStr )
+      return S_ERROR( errStr )
+
+    remoteSize = res['Value']
+
+    if not dest_file.startswith( 'file:' ):
+      dest = 'file://' + dest_file
+    else:
+      dest = dest_file
+      
+    try:
+      hdfs.cp( src_url, dest)
+    except Exception, e:
+      errStr = "HDFSStorage.__getSingleFile: error while downloading file: %s" % e
+      self.log.error( errStr )
+      return S_ERROR( errStr )
+
+    destSize = getSize( dest_file )
+    if destSize == remoteSize:
+      return S_OK( remoteSize )
+    else:
+      errStr = "HDFSStorage.__getSingleFile: File sizes don't match. Something went wrong, removing local file %s" % dest_file
+      if os.path.exists( dest_file ):
+        os.remove( dest_file )
+      return S_ERROR( errStr )
+
 
   def putFile( self, *parms, **kws ):
     """Put a copy of the local file to the current directory on the
@@ -187,10 +276,66 @@ class HDFSStorage( StorageBase ):
     """
     return S_ERROR( "Storage.putFile: implement me!" )
 
-  def removeFile( self, *parms, **kws ):
+  def removeFile( self, path ):
     """Remove physically the file specified by its path
+
+    A non existing file will be considered successfully removed
+
+    :param str path: path or list of paths to be removed
+    :returns Successful dict {path : True}
+             Failed dict {path : error message}
     """
-    return S_ERROR( "Storage.removeFile: implement me!" )
+
+    res = checkArgumentFormat( path )
+    if not res['OK']:
+      return res
+    urls = res['Value']
+
+    self.log.debug( "HDFSStorage.removeFile: Attempting to remove %s file(s)" % len( urls ) )
+
+    failed = {}
+    successful = {}
+
+    for url in urls:
+      res = self.__removeSingleFile( url )
+
+      if res['OK']:
+        successful[url] = res['Value']
+      else:
+        failed[url] = res['Message']
+
+    return S_OK( { 'Failed' : failed, 'Successful' : successful} )
+
+  def __removeSingleFile( self, path ):
+    """ Physically remove the file specified by path
+    :param str path: path on storage (hdfs://...)
+    :returns
+             S_OK( True )  if the removal was successful (also if file didnt exist in the first place)
+             S_ERROR( errStr ) if there was a problem removing the file
+    """
+
+    self.log.debug( "HDFSStorage.__removeSingleFile: Attempting to remove file %s" % path )
+
+    # If the file doesn't exist, pydoop returns a general exception without specifying that the file doesn't exist.
+    # For this reason we check if the file exists in the first place and if not we just return S_OK( True )
+
+    res = self.__singleExists( path )
+    if res['OK']:  #
+      if not res['Value']:
+        return S_OK( True )
+
+    try:
+      hdfs.rmr( path )
+      return True
+    except Exception, e:
+      res = self.__existsHelper( path )
+      if not res:
+        return S_OK( True )
+      errStr = 'HDFSStorage.__removeSingleFile: Error occured while trying to remove a file: %s' % e
+      self.log.error( errStr )
+      return S_ERROR( errStr )
+
+
 
   def getFileMetadata( self, *parms, **kws ):
     """  Get metadata associated to the file
@@ -253,7 +398,6 @@ class HDFSStorage( StorageBase ):
         errStr = "HDFSStorage.__getSingleFileSize: Failed to determine file size: %s" % e
         self.log.error( errStr )
         return S_ERROR( errStr )
-    pass
 
   def prestageFile( self, *parms, **kws ):
     """ Issue prestage request for file
