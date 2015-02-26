@@ -325,17 +325,9 @@ class HDFSStorage( StorageBase ):
 
     self.log.debug( "HDFSStorage.__removeSingleFile: Attempting to remove file %s" % path )
 
-    # If the file doesn't exist, pydoop returns a general exception without specifying that the file doesn't exist.
-    # For this reason we check if the file exists in the first place and if not we just return S_OK( True )
-
-    res = self.__singleExists( path )
-    if res['OK']:  #
-      if not res['Value']:
-        return S_OK( True )
-
     try:
       hdfs.rmr( path )
-      return True
+      return S_OK( True )
     except Exception, e:
       res = self.__existsHelper( path )
       if not res:
@@ -346,10 +338,59 @@ class HDFSStorage( StorageBase ):
 
 
 
-  def getFileMetadata( self, *parms, **kws ):
+  def getFileMetadata( self, path ):
     """  Get metadata associated to the file
+
+    :param self: self reference
+    :param str path: path (or list of paths) on the storage
+    :returns successful dict { path : metadata }
+             failed dict { path : error message }
     """
-    return S_ERROR( "Storage.getFileMetadata: implement me!" )
+
+    res = checkArgumentFormat( path )
+    if not res['OK']:
+      return res
+    urls = res['Value']
+
+    self.log.debug( "HDFSStorage.getFileMetadata: Attempting to retrieve metadata for %s file(s)" % len( urls ) )
+
+    successful = {}
+    failed = {}
+
+    for url in urls:
+      res = self.__getSingleMetadata( url )
+
+      if res['OK']:
+        successful[url] = res['Value']
+      else:
+        failed[url] = res['Message']
+
+    return S_OK( { 'Failed' : failed, 'Successful' : successful } )
+
+
+  def __getSingleFileMetadata( self, path ):
+    """ Fetch the metadata associated to the file
+    :param self: self reference
+    :param str path: path on the storage
+    :returns S_OK( metadatadict ) if we could get the metadata
+             S_ERROR( error message ) in case of an error
+    """
+    res = self.__getSingleMetadata( path )
+    if not res['OK']:
+      return res
+
+    metadataDict = res['Value']
+
+    if not metadataDict['File']:
+      errStr = "HDFSStorage.__getSingleMetadata: supplied path is not a file."
+      self.log.error( errStr, path )
+      return S_ERROR( errStr )
+
+    return S_OK( metadataDict )
+
+  def __getSingleMetadata( self, path ):
+
+    pass
 
   def getFileSize( self, path ):
     """Get the physical size of the given file

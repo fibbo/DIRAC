@@ -26,7 +26,7 @@ class GFAL2_XROOTStorage( GFAL2_StorageBase ):
     :param str host: SE host
     :param int port: port to use to communicate with :host:
     :param str spaceToken: space token
-    :param str wspath: location of SRM on :host:
+    :param str wspath: location of XROOT on :host:
     """
     self.log = gLogger.getSubLogger( "GFAL2_XROOTStorage", True )
     # # init base class
