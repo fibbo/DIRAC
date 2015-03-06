@@ -389,6 +389,23 @@ class HDFSStorage( StorageBase ):
     return S_OK( metadataDict )
 
   def __getSingleMetadata( self, path ):
+    """ Get the meta data of a path or a list of paths.
+
+    :param self: self reference
+    :param str path: path or a list of paths
+    :returns S_OK( metadata dict )
+             S_ERROR( error message )
+    """
+
+    self.log.debug( "HDFS.__getSingleMetadata: reading metadata for %s" % path )
+    
+    try:
+      stats = hdfs.lsl( path )
+      stats = hdfs.path.isdir( path )
+
+    except IOError, e:
+      print e
+
 
     pass
 
@@ -474,10 +491,68 @@ class HDFSStorage( StorageBase ):
   # These are the methods for directory manipulation
   #
 
-  def isDirectory( self, *parms, **kws ):
+  def isDirectory( self, path ):
     """Check if the given path exists and it is a directory
+
+    :param self: self reference
+    :param str path: path or list of paths to check if they are directories or not
+    :returns successful dict { path : bool }
+             failed dict { path : error message }
+
     """
-    return S_ERROR( "Storage.isDirectory: implement me!" )
+
+    res = checkArgumentFormat( path )
+    if not res['OK']:
+      return res
+    urls = res['Value']
+
+    self.log.debug( "HDFSStorage.isDirectory: Determining whether %s paths are directories." % len( urls ) )
+
+    successful = {}
+    failed = {}
+
+    for url in urls:
+      res = self.__isSingleDirectory( url )
+
+      if res['OK']:
+        successful[url] = res['Value']
+      else:
+        failed[url] = res['Message']
+        
+    
+    return S_OK( { 'Failed' : failed, 'Successful' : successful } )
+
+  def __isSingleDirectory( self, path ):
+    """ Check if given path is a directory
+    
+    :param self: self reference
+    :param str path: path to be checked
+    :returns S_OK( bool ) whether path is a directory or not
+             S_ERROR( error message ) if there is an error    
+    """
+    
+    try:
+      # lsl returns a list of dictionaries. since we only check for one file. the first entry
+      # is the metadata dict we are interested int
+      res = hdfs.lsl( path )
+      if res[0]['kind'] == 'directory':
+        return S_OK( True )
+      else:
+        return S_OK( False )
+    except IOError, e:
+      if 'No such file' in str( e ):
+        errStr = "HDFSStorage.__isSingleDirectory: File does not exist."
+        self.log.debug( errStr )
+        S_ERROR( errStr )
+      else:
+        errStr = "HDFSStorage.__isSingleDirectory: IOError while retrieving path properties %s" % e
+        self.log.error( errStr )
+        return S_ERROR( errStr )
+    except Exception, e:
+        errStr = "HDFSStorage.__isSingleDirectory: Exception caught while retrieving path properties %s" % e
+        self.log.error( errStr )
+        return S_ERROR( errStr )
+
 
   def getDirectory( self, *parms, **kws ):
     """Get locally a directory from the physical storage together with all its
