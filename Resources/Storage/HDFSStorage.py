@@ -401,7 +401,7 @@ class HDFSStorage( StorageBase ):
     
     try:
       stats = hdfs.lsl( path )
-      stats = hdfs.path.isdir( path )
+
 
     except IOError, e:
       print e
