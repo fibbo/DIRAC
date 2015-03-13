@@ -19,6 +19,7 @@ from DIRAC import gLogger, gConfig, S_OK, S_ERROR
 from DIRAC.Resources.Utilities import checkArgumentFormat
 from DIRAC.Resources.Storage.StorageBase import StorageBase
 from DIRAC.Core.Utilities.File import getSize
+from DIRAC.DataManagementSystem.Utilities.lfc_dfc_copy import path
 
 
 # # RCSID
@@ -358,7 +359,7 @@ class HDFSStorage( StorageBase ):
     failed = {}
 
     for url in urls:
-      res = self.__getSingleMetadata( url )
+      res = self.__getSingleMetadata( url, 'file' )
 
       if res['OK']:
         successful[url] = res['Value']
@@ -388,7 +389,7 @@ class HDFSStorage( StorageBase ):
 
     return S_OK( metadataDict )
 
-  def __getSingleMetadata( self, path ):
+  def __getSingleMetadata( self, path, recursive = False ):
     """ Get the meta data of a path or a list of paths.
 
     :param self: self reference
@@ -397,17 +398,29 @@ class HDFSStorage( StorageBase ):
              S_ERROR( error message )
     """
 
-    self.log.debug( "HDFS.__getSingleMetadata: reading metadata for %s" % path )
-    
+    self.log.debug( "HDFSStorage.__getSingleMetadata: reading metadata for %s" % path )
     try:
-      stats = hdfs.lsl( path )
-
-
+      stats = hdfs.lsl( path, recursive )
+      metadataDict = self.__convertMetadataDict( stats )
+      return S_OK( metadataDict )
     except IOError, e:
-      print e
+      errStr = "HDFSStorage.__getSingleMetadata: Error while reading metadata: %s" % e
+      self.log.error( errStr )
+      return S_ERROR( errStr )
 
 
-    pass
+  def __convertMetadataDict( self, stats ):
+    metadata = {}
+    metadata['File'] = stats[0]['kind'] == 'file'
+    metadata['Directory'] = stats[0]['kind'] == 'directory'
+    metadata['Mode'] = stats[0]['permissions']
+    if metadata['File']:
+      metadata['ModTime'] = self.__convertTime( stats[0]['last_mod'] ) if stats[0]['last_mod'] else 'Never'
+      metadata['Executable'] = bool( stats[0]['permissions'] & S_IXUSR )
+      metadata['Readable'] = bool( stats[0]['permissions'] & S_IRUSR )
+      metadata['Writeable'] = bool( stats[0]['permissions'] & S_IWUSR )
+      metadata['Size'] = long( stats[0]['size'] )
+    return S_OK( metadata )
 
   def getFileSize( self, path ):
     """Get the physical size of the given file
@@ -554,22 +567,133 @@ class HDFSStorage( StorageBase ):
         return S_ERROR( errStr )
 
 
-  def getDirectory( self, *parms, **kws ):
-    """Get locally a directory from the physical storage together with all its
-       files and subdirectories.
+  def putDirectory( self, path ):
+    """ Puts one or more local directories to the physical storage together with all its files
+    :param self: self reference
+    :param str path: dictionary { hdfs://... (destination) : localdir (source dir) }
+    :return successful and failed dictionaries. The keys are the paths,
+            the values are dictionary {'Files' : amount of files uploaded, 'Size' : amount of data upload }
+            S_ERROR in case of argument problems
     """
-    return S_ERROR( "Storage.getDirectory: implement me!" )
+    res = checkArgumentFormat( path )
+    if not res['OK']:
+      return res
+    urls = res['Value']
 
-  def putDirectory( self, *parms, **kws ):
+    self.log.debug( 'HDFSStorage.putDirectory: Attempting to put %s directories to remote storage' % len( urls ) )
+
+    successful = {}
+    failed = {}
+
+    for destDir, sourceDir in urls.items():
+      if not sourceDir:
+        self.log.debug( 'SourceDir: %s' % sourceDir )
+        errStr = 'HDFSStorage.putDirectory: No source directory set, make sure the input format is correct { dest. dir : source dir }'
+        return S_ERROR( errStr )
+      res = self.__putSingleDirectory( sourceDir, destDir )
+      if res['OK']:
+        if res['Value']['AllPut']:
+          self.log.debug( "HDFSStorage.putDirectory: Successfully put directory to remote storage: %s" % destDir )
+          successful[destDir] = { 'Files' : res['Value']['Files'], 'Size' : res['Value']['Size']}
+        else:
+          self.log.error( "HDFSStorage.putDirectory: Failed to put entire directory to remote storage.", destDir )
+          failed[destDir] = { 'Files' : res['Value']['Files'], 'Size' : res['Value']['Size']}
+      else:
+        self.log.error( "HDFSStorage.putDirectory: Completely failed to put directory to remote storage.", destDir )
+        failed[destDir] = { "Files" : 0, "Size" : 0 }
+    return S_OK( { "Failed" : failed, "Successful" : successful } )
+
+
+  def __putSingleDirectory( self, src_directory, dest_directory ):
+    """ puts one local directory to the physical storage together with all its files and subdirectories
+        :param self: self reference
+        :param src_directory : the local directory to copy
+        :param dest_directory: pfn (hdfs://...) where to copy
+        :returns: S_ERROR if there is a fatal error
+                  S_OK if we could upload something :
+                                    'AllPut': boolean of whether we could upload everything
+                                    'Files': amount of files uploaded
+                                    'Size': amount of data uploaded
+    """
+    self.log.debug( 'GFAL2_StorageBase.__putSingleDirectory: trying to upload %s to %s' % ( src_directory, dest_directory ) )
+
+    filesPut = 0
+    sizePut = 0
+
+    if not os.path.isdir( src_directory ):
+      errStr = 'GFAL2_StorageBase.__putSingleDirectory: The supplied source directory does not exist or is not a directory.'
+      self.log.error( errStr, src_directory )
+      return S_ERROR( errStr )
+    try:
+      hdfs.cp( src_directory, dest_directory )
+      allSuccessful = True
+
+    except IOError, e:
+      if 'No such file' in str( e ):
+        errStr = "HDFSStorage.__putSingleDirectory: File does not exist."
+        self.log.debug( errStr )
+        S_ERROR( errStr )
+      else:
+        errStr = "HDFSStorage.__putSingleDirectory: IOError while trying to put folder on the HDFS storage: %s" % e
+        self.log.error( errStr )
+        return S_ERROR( errStr )
+    except Exception, e:
+        errStr = "HDFSStorage.__putSingleDirectory: Exception caught while trying to put folder on the HDFS storage: %s" % e
+        self.log.error( errStr )
+        return S_ERROR( errStr )
+    return S_OK( { 'AllPut' : allSuccessful, 'Files' : filesPut, 'Size' : sizePut} )
+
+  def getDirectory( self, *parms, **kws ):
     """Put a local directory to the physical storage together with all its
        files and subdirectories.
     """
     return S_ERROR( "Storage.putDirectory: implement me!" )
 
-  def createDirectory( self, *parms, **kws ):
+  def createDirectory( self, path ):
     """ Make a new directory on the physical storage
+
+    :param self: self reference
+    :param str path: path to be created on the storage (hdfs://...)
+    :returns Successful dict {path : True}
+             Failed dicht { path : error message }
+             S_ERROR in case of argument problems
     """
-    return S_ERROR( "Storage.createDirectory: implement me!" )
+
+    urls = checkArgumentFormat( path )
+    if not urls['OK']:
+      return urls
+    urls = urls['Value']
+
+    successful = {}
+    failed = {}
+
+    self.log.debug( "HDFSStorage.createDirectory: Attempting to create %s directory/ies" ) % len( urls )
+
+    for url in urls:
+      res = self.__createSingleDirectory( url )
+      if res['OK']:
+        successful[url] = True
+      else:
+        failed[url] = res['Message']
+
+    return S_OK( { 'Failed' : failed, 'Successful' : successful} )
+
+  def __createSingleDirectory( self, path ):
+    """ Create directory :path: on the storage
+
+    :param self: self reference
+    :param str path: path to be created
+    :returns S_OK() if creation was successful
+             S_ERROR() if there was an error
+    """
+
+    try:
+      hdfs.mkdir( path )
+      return S_OK()
+    except IOError, e:
+      errStr = "HDFSStorage.__createSingleDirectory: Error while creating directory: %s" % e
+      self.log.error( errStr )
+      return S_ERROR( errStr )
 
   def removeDirectory( self, *parms, **kws ):
     """Remove a directory on the physical storage together with all its files and
@@ -577,15 +701,148 @@ class HDFSStorage( StorageBase ):
     """
     return S_ERROR( "Storage.removeDirectory: implement me!" )
 
-  def listDirectory( self, *parms, **kws ):
-    """ List the supplied path
-    """
-    return S_ERROR( "Storage.listDirectory: implement me!" )
+  def listDirectory( self, path ):
+    """ List the content of the path provided
 
-  def getDirectoryMetadata( self, *parms, **kws ):
-    """ Get the metadata for the directory
+    :param str path: single or list of paths (hdfs://...)
+    :return failed  dict {path : message }
+            successful dict { path :  {'SubDirs' : subDirs, 'Files' : files} }.
+            They keys are the paths, the values are the dictionary 'SubDirs' and 'Files'.
+            Each are dictionaries with path as key and metadata as values
+            S_ERROR in case of argument problems
     """
-    return S_ERROR( "Storage.getDirectoryMetadata: implement me!" )
+    res = checkArgumentFormat( path )
+    if not res['OK']:
+      return res
+    urls = res['Value']
+
+    self.log.debug( "HDFSStorage.listDirectory: Attempting to list %s directories" % len( urls ) )
+
+    res = self.isDirectory( urls )
+    if not res['OK']:
+      return res
+    successful = {}
+    failed = res['Value']['Failed']
+
+    directories = []
+
+    for url, isDirectory in res['Value']['Successful'].items():
+      if isDirectory:
+        directories.append( url )
+      else:
+        errStr = "GFAL2_StorageBase.listDirectory: path is not a directory"
+        gLogger.error( errStr, url )
+        failed[url] = errStr
+
+    for directory in directories:
+      res = self.__listSingleDirectory( directory )
+      if not res['OK']:
+        failed[directory] = res['Message']
+      else:
+        successful[directory] = res['Value']
+
+
+    resDict = { 'Failed' : failed, 'Successful' : successful }
+    return S_OK( resDict )
+
+
+  def __listSingleDirectory( self, path ):
+    """ List the content of the single directory provided
+    :param self: self reference
+    :param str path: single path on storage (hdfs://...)
+    :returns S_ERROR( errStr ) if there is an error
+             S_OK( dictionary ): Key: SubDirs and Files
+                                 The values of the Files are dictionaries with filename as key and metadata as value
+                                 The values of SubDirs are just the dirnames as key and True as value
+    """
+    
+    self.log.debug("HDFSStorage.__listSingleDirectory: Attemping to list content of directory")
+    try:
+      listing = hdfs.lsl( path, recursive = False )
+
+    except IOError, e:
+      if 'No such file' in str( e ):
+        errStr = "HDFSStorage.__listSingleDirectory: Path does not exist."
+        self.log.error( errStr )
+        return S_ERROR( errStr )
+
+      else:
+        errStr = "HDFSStorage.__listSingleDirectory: IOError while trying to list the directory: %s" % e
+        self.log.error( errStr )
+        return S_ERROR( errStr )
+    except Exception, e:
+      errStr = "HDFSStorage.__listSingleDirectory: Exception caught while trying to list the directory: %s" % e
+      self.log.error( errStr )
+      return S_ERROR( errStr )
+
+    files = {}
+    subDirs = {}
+
+    for entry in listing:
+      metadataDict = self.__convertMetadataDict( entry )
+
+      if metadataDict['Directory']:
+        subDirs[entry['name']] = metadataDict
+      elif metadataDict['File']:
+        files[entry['name']] = metadataDict
+      else:
+        self.log.debug( "HDFSStorage.__listSingleDirectory: Found item which is neither file nor directory: %s" ) % entry['name']
+
+    return S_OK( { 'SubDirs' : subDirs, 'Files' : files } )
+
+  def getDirectoryMetadata( self, path ):
+    """ Get metadata for the directory(ies) provided
+
+    :param self: self reference
+    :param str path: path (or list of paths) on storage (hdfs://...)
+    :returns Successful dict {path : metadata}
+             Failed dict {path : errStr}
+             S_ERROR in case of argument problems
+    """
+    res = checkArgumentFormat( path )
+    if not res['OK']:
+      return res
+    urls = res['Value']
+
+    self.log.debug( "HDFSStorage.getDirectoryMetadata: Attempting to fetch metadata for %s directory/ies." ) % len( urls )
+
+    failed = {}
+    successful = {}
+
+    for url in urls:
+      res = self.__getSingleDirectoryMetadata( url )
+
+      if not res['OK']:
+        failed[url] = res['Message']
+      else:
+        successful[url] = res['Value']
+
+    return S_OK( { 'Failed' : failed, 'Successful' : successful} )
+
+  def __getSingleDirectoryMetadata( self, path ):
+    """ Fetch the metadata of the provided path
+    :param self: self reference
+    :param str path: path (only 1) on the storage (hdfs://...)
+    :returns
+      S_OK( metadataDict ) if we could get the metadata
+      S_ERROR( errStr )if there was a problem getting the metadata or path isn't a directory
+    """
+    self.log.debug( "HDFSStorage.__getSingleDirectoryMetadata: Fetching metadata of directory %s." % path )
+
+    res = self.__getSingleMetadata( path )
+
+    if not res['OK']:
+      return res
+
+    metadataDict = res['Value']
+
+    if not metadataDict['Directory']:
+      errStr = "HDFSStorage.__getSingleDirectoryMetadata: Provided path is not a directory."
+      self.log.error( errStr, path )
+      return S_ERROR( errStr )
+
+    return S_OK( metadataDict )
+
 
   def getDirectorySize( self, *parms, **kws ):
     """ Get the size of the directory on the storage
