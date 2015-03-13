@@ -562,9 +562,9 @@ class HDFSStorage( StorageBase ):
         self.log.error( errStr )
         return S_ERROR( errStr )
     except Exception, e:
-        errStr = "HDFSStorage.__isSingleDirectory: Exception caught while retrieving path properties %s" % e
-        self.log.error( errStr )
-        return S_ERROR( errStr )
+      errStr = "HDFSStorage.__isSingleDirectory: Exception caught while retrieving path properties %s" % e
+      self.log.error( errStr )
+      return S_ERROR( errStr )
 
 
   def putDirectory( self, path ):
@@ -615,13 +615,13 @@ class HDFSStorage( StorageBase ):
                                     'Files': amount of files uploaded
                                     'Size': amount of data uploaded
     """
-    self.log.debug( 'GFAL2_StorageBase.__putSingleDirectory: trying to upload %s to %s' % ( src_directory, dest_directory ) )
+    self.log.debug( 'HDFSStorage.__putSingleDirectory: trying to upload %s to %s' % ( src_directory, dest_directory ) )
 
     filesPut = 0
     sizePut = 0
 
     if not os.path.isdir( src_directory ):
-      errStr = 'GFAL2_StorageBase.__putSingleDirectory: The supplied source directory does not exist or is not a directory.'
+      errStr = 'HDFSStorage.__putSingleDirectory: The supplied source directory does not exist or is not a directory.'
       self.log.error( errStr, src_directory )
       return S_ERROR( errStr )
     try:
@@ -629,18 +629,13 @@ class HDFSStorage( StorageBase ):
       allSuccessful = True
 
     except IOError, e:
-      if 'No such file' in str( e ):
-        errStr = "HDFSStorage.__putSingleDirectory: File does not exist."
-        self.log.debug( errStr )
-        S_ERROR( errStr )
-      else:
-        errStr = "HDFSStorage.__putSingleDirectory: IOError while trying to put folder on the HDFS storage: %s" % e
-        self.log.error( errStr )
-        return S_ERROR( errStr )
+      errStr = "HDFSStorage.__putSingleDirectory: IOError while trying to put folder on the HDFS storage: %s" % e
+      self.log.error( errStr )
+      return S_ERROR( errStr )
     except Exception, e:
-        errStr = "HDFSStorage.__putSingleDirectory: Exception caught while trying to put folder on the HDFS storage: %s" % e
-        self.log.error( errStr )
-        return S_ERROR( errStr )
+      errStr = "HDFSStorage.__putSingleDirectory: Exception caught while trying to put folder on the HDFS storage: %s" % e
+      self.log.error( errStr )
+      return S_ERROR( errStr )
     return S_OK( { 'AllPut' : allSuccessful, 'Files' : filesPut, 'Size' : sizePut} )
 
   def getDirectory( self, *parms, **kws ):
@@ -679,7 +674,7 @@ class HDFSStorage( StorageBase ):
     return S_OK( { 'Failed' : failed, 'Successful' : successful} )
 
   def __createSingleDirectory( self, path ):
-    """ Create directory :path: on the storage
+    """ Create directory :path: on the storage. Also creates non existing parent directories.
 
     :param self: self reference
     :param str path: path to be created
@@ -730,7 +725,7 @@ class HDFSStorage( StorageBase ):
       if isDirectory:
         directories.append( url )
       else:
-        errStr = "GFAL2_StorageBase.listDirectory: path is not a directory"
+        errStr = "HDFSStorage.listDirectory: path is not a directory"
         gLogger.error( errStr, url )
         failed[url] = errStr
 
@@ -765,7 +760,6 @@ class HDFSStorage( StorageBase ):
         errStr = "HDFSStorage.__listSingleDirectory: Path does not exist."
         self.log.error( errStr )
         return S_ERROR( errStr )
-
       else:
         errStr = "HDFSStorage.__listSingleDirectory: IOError while trying to list the directory: %s" % e
         self.log.error( errStr )
