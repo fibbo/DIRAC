@@ -173,13 +173,10 @@ class HDFSStorage( StorageBase ):
     self.log.debug( "HDFSStorage.__isSingleFile: checking if %s is a file or not" % path )
     
     try:
-      # lsl returns a list of dictionaries. since we only check for one file. the first entry
-      # is the metadata dict we are interested int
-      res = hdfs.lsl( path )
-      if res[0]['kind'] == 'file':
-        return S_OK( True )
-      else:
-        return S_OK( False )
+      # TODO: might need to do an exist check first because
+      # path.isfile just returns false if file doesnt exist
+      res = hdfs.path.isfile( path )
+      return S_OK( res )
     except IOError, e:
       if 'No such file' in str( e ):
         errStr = "HDFSStorage.__isSingleFile: File does not exist."
@@ -329,11 +326,15 @@ class HDFSStorage( StorageBase ):
     try:
       hdfs.rmr( path )
       return S_OK( True )
-    except Exception, e:
+    except IOError, e:
       res = self.__existsHelper( path )
       if not res:
         return S_OK( True )
-      errStr = 'HDFSStorage.__removeSingleFile: Error occured while trying to remove a file: %s' % e
+      errStr = 'HDFSStorage.__removeSingleFile: IOError occured while trying to remove a file: %s' % e
+      self.log.error( errStr )
+      return S_ERROR( errStr )
+    except Exception, e:
+      errStr = 'HDFSStorage.__removeSingleFile: Exception occured while trying to remove a file: %s' % e
       self.log.error( errStr )
       return S_ERROR( errStr )
 
@@ -741,7 +742,7 @@ class HDFSStorage( StorageBase ):
     return S_OK( resDict )
 
 
-  def __listSingleDirectory( self, path ):
+  def __listSingleDirectory( self, path, recursive = False ):
     """ List the content of the single directory provided
     :param self: self reference
     :param str path: single path on storage (hdfs://...)
@@ -753,7 +754,7 @@ class HDFSStorage( StorageBase ):
     
     self.log.debug("HDFSStorage.__listSingleDirectory: Attemping to list content of directory")
     try:
-      listing = hdfs.lsl( path, recursive = False )
+      listing = hdfs.lsl( path, recursive )
 
     except IOError, e:
       if 'No such file' in str( e ):
