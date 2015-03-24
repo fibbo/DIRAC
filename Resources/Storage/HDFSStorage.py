@@ -19,7 +19,7 @@ from DIRAC import gLogger, gConfig, S_OK, S_ERROR
 from DIRAC.Resources.Utilities import checkArgumentFormat
 from DIRAC.Resources.Storage.StorageBase import StorageBase
 from DIRAC.Core.Utilities.File import getSize
-from DIRAC.DataManagementSystem.Utilities.lfc_dfc_copy import path
+
 
 
 # # RCSID
@@ -277,11 +277,116 @@ class HDFSStorage( StorageBase ):
       return S_ERROR( errStr )
 
 
-  def putFile( self, *parms, **kws ):
+  def putFile( self, path ):
     """Put a copy of the local file to the current directory on the
        physical storage
     """
-    return S_ERROR( "Storage.putFile: implement me!" )
+    res = checkArgumentFormat( path )
+    if not res['OK']:
+      return res
+    urls = res['Value']
+
+    self.log.debug( "HDFSStorage.putFile: Attempting to put %s file(s) on the storage element" % len( urls ) )
+
+    failed = {}
+    successful = {}
+
+    for dest_url, src_file in urls.items():
+      if not src_file:
+        errStr = "HDFSStorage.putFile: Source file not set. Argument must be a dictionary {url : local path}"
+        self.log.error( errStr )
+        return S_ERROR( errStr )
+
+      res = self.__putSingleFile()
+
+      if res['OK']:
+        successful[dest_url] = res['Value']
+      else:
+        failed[dest_url] = res['Message']
+
+    return S_OK( { 'Failed' : failed, 'Successful' : successful} )
+  
+  def __putSingleFile( self, src_file, dest_url ):
+    """ Put a copy of a local file to the storage.
+    
+    :param self: self reference
+    :param str src_file: path of file that will be copied
+    :param str dest_url: url of where the src_file will be copied
+    :returns S_OK(fileSize) if everything went OK, S_ERROR otherwise
+    """
+    # ## assume anyone who calls this method makes sure we have a src_file defined
+    # ## HDFSStorage.putFile makes sure src_file is defined.
+    if not os.path.exists( src_file ) or not os.path.isfile( src_file ):
+      errStr = "HDFSStorage.__putSingleFile: The local source file does not exist or is not a file"
+      self.log.error( errStr )
+      return S_ERROR( errStr )
+    
+    # convert source file path to absolute path
+    src_file = os.path.abspath( src_file )
+
+    # sourceSize to compare the file size after copying
+    sourceSize = getSize( src_file )
+    if sourceSize == -1:
+      errStr = "HDFSStorage.__putSingleFile: Failed to get file size."
+      self.log.error( errStr )
+      return S_ERROR( errStr )
+    if sourceSize == 0:
+      errStr = "HDFSStorage.__putSingleFile: Source size is zero."
+      self.log.error( errStr )
+      return S_ERROR( errStr )
+    
+    # if remote file exists remove it first so the copy won't fail
+    res = self.__singleExists( dest_url )
+    if not res['OK']:
+      errStr = "HDFSStorage.__putSingleFile: Error while determining existence of file on storage."
+      self.log.error(errStr)
+      return S_ERROR(errStr)
+    
+    # file already exists, we need to remove it
+    if res['Value']:
+      res = self.__removeSingleFile( dest_url )
+
+    # file could not be removed, we return
+    if not res['OK']:
+      return res
+
+    # file has been removed we can copy now the new file
+    try:
+      hdfs.put( src_file, dest_url )
+      cp_successful = True
+    except IOError, e:
+      errStr = "HDFSStorage.__putSingleFile: Error while copying file to storage: %s" % e
+      self.log.error( errStr )
+      cp_successful = False
+
+    # According to pydoop the copying was done properly, compare remote and source file size
+    if cp_successful:
+      res = self.__getSingeFileSize( dest_url )
+      if res['OK']:
+        remoteSize = res['Value']
+      # Sizes match, operation successful
+        if sourceSize == remoteSize:
+          self.log.debug( "HDFSStorage.__putSingleFile: File copied successfully. Post transfer check successful." )
+          return S_OK( sourceSize )
+      # Failed to get remote file size, we
+      errStr = "HDFSStorage.__putSingleFile: Could not get remote file size."
+      self.log.error( errStr, res['Message'] )
+
+
+    # either pydoop copy failed or file sizes don't match, delete remote file if it exists
+    res = self.__removeSingleFile( dest_url )
+
+    # Failed to remove destination file.
+    if not res['OK']:
+      errStr = "HDFSStorage.__putSingleFile: Failed to remove destination file: %s" % res['Message']
+      return S_ERROR( errStr )
+
+    # We removed destination file.
+    errStr = "HDFSStorage.__putSingleFile: Source and destination file sizes do not match (source size: %s, dest size: %s). Removed destination file" % \
+                                                                                                        ( sourceSize, remoteSize )
+    self.log.error( errStr )
+    return S_ERROR( errStr )
+
 
   def removeFile( self, path ):
     """Remove physically the file specified by its path
@@ -483,22 +588,30 @@ class HDFSStorage( StorageBase ):
   def prestageFile( self, *parms, **kws ):
     """ Issue prestage request for file
     """
-    return S_ERROR( "Storage.prestageFile: implement me!" )
+    errStr = "HDFSStorage.prestageFile: Operation not supported."
+    self.log.error( errStr )
+    return S_ERROR( errStr )
 
   def prestageFileStatus( self, *parms, **kws ):
     """ Obtain the status of the prestage request
     """
-    return S_ERROR( "Storage.prestageFileStatus: implement me!" )
+    errStr = "HDFSStorage.prestageFileStatus: Operation not supported."
+    self.log.error( errStr )
+    return S_ERROR( errStr )
 
   def pinFile( self, *parms, **kws ):
     """ Pin the file on the destination storage element
     """
-    return S_ERROR( "Storage.pinFile: implement me!" )
+    errStr = "HDFSStorage.pinFile: Operation not supported."
+    self.log.error( errStr )
+    return S_ERROR( errStr )
 
   def releaseFile( self, *parms, **kws ):
     """ Release the file on the destination storage element
     """
-    return S_ERROR( "Storage.releaseFile: implement me!" )
+    errStr = "HDFSStorage.releaseFile: Operation not supported."
+    self.log.error( errStr )
+    return S_ERROR( errStr )
 
   #############################################################
   #
@@ -625,19 +738,41 @@ class HDFSStorage( StorageBase ):
       errStr = 'HDFSStorage.__putSingleDirectory: The supplied source directory does not exist or is not a directory.'
       self.log.error( errStr, src_directory )
       return S_ERROR( errStr )
-    try:
-      hdfs.cp( src_directory, dest_directory )
-      allSuccessful = True
 
-    except IOError, e:
-      errStr = "HDFSStorage.__putSingleDirectory: IOError while trying to put folder on the HDFS storage: %s" % e
-      self.log.error( errStr )
-      return S_ERROR( errStr )
-    except Exception, e:
-      errStr = "HDFSStorage.__putSingleDirectory: Exception caught while trying to put folder on the HDFS storage: %s" % e
-      self.log.error( errStr )
-      return S_ERROR( errStr )
-    return S_OK( { 'AllPut' : allSuccessful, 'Files' : filesPut, 'Size' : sizePut} )
+    contents = os.listdir( src_directory )
+
+    allSuccessful = True
+    directoryFiles = {}
+    for fileName in contents:
+      localPath = '%s/%s' % ( src_directory, fileName )
+      remotePath = '%s/%s' % ( dest_directory, fileName )
+
+      if not os.path.isdir( localPath ):
+        directoryFiles[remotePath] = localPath
+      else:
+        res = self.__putSingleDirectory( localPath, remotePath )
+      if not res['OK']:
+        errStr = 'HDFSStorage.__putSingleDirectory: Failed to put directory to storage.'
+        self.log.error( errStr, res['Message'] )
+      else:
+        if not res['Value']['AllPut']:
+          allSuccessful = False
+        filesPut += res['Value']['Files']
+        sizePut += res['Value']['Size']
+
+    if directoryFiles:
+      res = self.putFile( directoryFiles )
+      if not res['OK']:
+        self.log.error( "HDFSStorage.__putSingleDirectory: Failed to put files to storage: %s" % res['Message'] )
+        allSuccessful = False
+      else:
+        for fileSize in res['Value']['Successful'].itervalues():
+          filesPut += 1
+          sizePut += fileSize
+        if res['Value']['Failed']:
+          allSuccessful = False
+    return S_OK( { 'AllPut' : allSuccessful, 'Files' : filesPut, 'Size' : sizePut } )
+
 
   def getDirectory( self, *parms, **kws ):
     """Put a local directory to the physical storage together with all its
