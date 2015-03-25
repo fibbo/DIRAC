@@ -19,6 +19,7 @@ from DIRAC import gLogger, gConfig, S_OK, S_ERROR
 from DIRAC.Resources.Utilities import checkArgumentFormat
 from DIRAC.Resources.Storage.StorageBase import StorageBase
 from DIRAC.Core.Utilities.File import getSize
+from rexec import FileDelegate
 
 
 
@@ -94,7 +95,6 @@ class HDFSStorage( StorageBase ):
       return res
     urls = res['Value']
     
-
     successful = {}
     failed = {}
     
@@ -368,6 +368,7 @@ class HDFSStorage( StorageBase ):
         if sourceSize == remoteSize:
           self.log.debug( "HDFSStorage.__putSingleFile: File copied successfully. Post transfer check successful." )
           return S_OK( sourceSize )
+
       # Failed to get remote file size, we
       errStr = "HDFSStorage.__putSingleFile: Could not get remote file size."
       self.log.error( errStr, res['Message'] )
@@ -506,8 +507,9 @@ class HDFSStorage( StorageBase ):
 
     self.log.debug( "HDFSStorage.__getSingleMetadata: reading metadata for %s" % path )
     try:
-      stats = hdfs.lsl( path, recursive )
-      metadataDict = self.__convertMetadataDict( stats )
+      stats = hdfs.lsl( path )
+      # hdfs.lsl returns a list of dictionaries
+      metadataDict = self.__convertMetadataDict( stats[0] )
       return S_OK( metadataDict )
     except IOError, e:
       errStr = "HDFSStorage.__getSingleMetadata: Error while reading metadata: %s" % e
@@ -526,7 +528,7 @@ class HDFSStorage( StorageBase ):
       metadata['Readable'] = bool( stats[0]['permissions'] & S_IRUSR )
       metadata['Writeable'] = bool( stats[0]['permissions'] & S_IWUSR )
       metadata['Size'] = long( stats[0]['size'] )
-    return S_OK( metadata )
+    return metadata
 
   def getFileSize( self, path ):
     """Get the physical size of the given file
@@ -826,11 +828,122 @@ class HDFSStorage( StorageBase ):
       self.log.error( errStr )
       return S_ERROR( errStr )
 
-  def removeDirectory( self, *parms, **kws ):
+  def removeDirectory( self, path, recursive = False ):
     """Remove a directory on the physical storage together with all its files and
        subdirectories.
+
+       :param self: self reference
+       :param str path: path to the directories we want to delete
+       :param recursive: if True we recursively delete all subdirs as well
+       :returns S_OK with Successful dictionary: Files : number of files deleted
+                                                 Size : amount of data deleted
+                and  Failed dictionary: error message as value
+                S_ERROR in case of argument problems
     """
-    return S_ERROR( "Storage.removeDirectory: implement me!" )
+    res = checkArgumentFormat( path )
+    if not res['OK']:
+      return res
+    urls = res['Value']
+
+    self.log.debug( "HDFSStorage.removeDirectory: Attempting to remove %s directories." % len( urls ) )
+
+    successful = {}
+    failed = {}
+
+    for url in urls:
+      res = self.__removeSingleDirectory( url, recursive )
+
+      if res['OK']:
+        res = res['Value']
+        if res['AllRemoved']:
+          self.log.debug( "HDFSStorage.removeDirectory: Successfully removed %s" % url )
+          successful[url] = { 'FilesRemoved' : res['FilesRemoved'], 'SizeRemoved' : res['SizeRemoved'] }
+        else:
+          self.log.error( "HDFSStorage.removeDirectory: Failed to remove entire directory: %s" % url )
+          failed[url] = { 'FilesRemoved' : res['FilesRemoved'], 'SizeRemoved' : res['SizeRemoved'] }
+      else:
+        self.log.error( "HDFSStorage.removeDirectory: Completely failed to remove directory %s" % url )
+        failed[url] = res['Message']
+
+    return S_OK( { 'Failed' : failed, 'Successful' : successful } )
+  
+  def __removeSingleDirectory( self, path, recursive = False ):
+    """ Remove a directory on the storage. If recursive is True, also delete all sub directories
+
+    :param self: self reference
+    :param str path: directory to be removed
+    :param bool recursive: whether or not we want to delete also the sub folders
+    :returns S_OK( dictionary ) 'AllRemoved' : bool
+                                'FilesRemoved' : number of files deleted
+                                'SizeRemoved' : amount of data deleted
+             S_ERROR( error message ) in case of an error
+    """
+
+    res = self.__isSingleDirectory( path )
+    if not res['OK']:
+      self.log.error( "HDFSStorage.__removeSingleDirectory: Failed to determine if path is directory", res['Message'] )
+      return res
+
+    if not res['Value']:
+      errStr = "HDFSStorage.__removeSingleDirectory: Path is not a directory"
+      self.log.error( errStr )
+      return S_ERROR( errStr )
+
+    # if recursive is true we make use of the pydoop rmr command which allows us easily
+    # to remove whole directories recursively with one command. we first to a getDirectorySize
+    # also recursively to get the statistic we need for the return
+    if recursive:
+      res = self.__getSingleDirectorySize( path, recursive )
+      if not res['OK']:
+        self.log.error( "HDFSStorage.__removeSingleDirectory: Couldn't get directory size for the return statistic", res['Message'] )
+        return res
+      res = res['Value']
+      sizeRemoved = res['Size']
+      filesRemoved = res['Files']
+      try:
+        # hdfs.rmr removes files and directories recursively
+        hdfs.rmr( path )
+      except IOError, e:
+        errStr = "HDFSStorage.__removeSingleDirectory: Failed to remove directory. %s" % e
+        self.log.error( errStr )
+        return S_ERROR( errStr )
+      allRemoved = True
+
+      return S_OK( { 'AllRemoved' : allRemoved, 'FilesRemoved' : filesRemoved, 'SizeRemoved' : sizeRemoved } )
+
+    # non recursive way. only remove files in the desired directory, leave subdirs untouched
+    else:
+      filesRemoved = 0
+      sizeRemoved = 0
+      res = self.__listSingleDirectory( path )
+      if not res['OK']:
+        errStr = "HDFSStorage.__removeSingleDirectory: Failed to list the directory."
+        self.log.error( errStr )
+        return S_ERROR( errStr )
+
+      filesDict = res['Value']['Files']
+      subDirsDict = res['Value']['SubDirs']
+      allRemoved = True
+      for sFile in filesDict:
+        res = self.__removeSingleFile( sFile )
+
+        if res['OK']:
+          filesRemoved += 1
+          sizeRemoved += filesDict[sFile]['Size']
+        else:
+          allRemoved = False
+      # we now remove the directory if all files have been removed and there are no subdirectories
+          
+      if allRemoved and (len( subDirsDict ) == 0 ):
+        # since directory is empty
+        try:
+          hdfs.rmr( path )
+        except IOError, e:
+          errStr = "HDFSStorage.__removeSingleDirectory: Couldn't remove the directory: %s" % e
+          self.log.error( errStr )
+          allRemoved = False
+
+      return S_OK( { 'AllRemoved' : allRemoved, 'FilesRemoved' : filesRemoved, 'SizeRemoved' : sizeRemoved} )
 
   def listDirectory( self, path ):
     """ List the content of the path provided
@@ -889,7 +1002,7 @@ class HDFSStorage( StorageBase ):
     
     self.log.debug("HDFSStorage.__listSingleDirectory: Attemping to list content of directory")
     try:
-      listing = hdfs.lsl( path, recursive )
+      listing = hdfs.lsl( path, recursive = recursive )
 
     except IOError, e:
       if 'No such file' in str( e ):
@@ -974,8 +1087,57 @@ class HDFSStorage( StorageBase ):
     return S_OK( metadataDict )
 
 
-  def getDirectorySize( self, *parms, **kws ):
+  def getDirectorySize( self, path ):
     """ Get the size of the directory on the storage
+
+    :param self: self reference
+    :param str path: path on the storage
+    :returns successful dictionary with Files : amount of files in the directory
+                                        Size : summed up size of files
+                                        Subdirs : amount of sub directories
+             failed dictionary with the error message
     """
-    return S_ERROR( "Storage.getDirectorySize: implement me!" )
-      
+    res = checkArgumentFormat( path )
+    if not res['OK']:
+      return res
+    urls = res['Value']
+
+    self.log.debug( "HDFSStorage.getDirectorySize: Attempting to get size of %s directories" % len( urls ) )
+
+    successful = {}
+    failed = {}
+
+    for url in urls:
+      res = self.__getSingleDirectorySize( url )
+      if res['OK']:
+        successful[url] = res['Value']
+      else:
+        failed[url] = res['Message']
+
+    return S_OK( { 'Failed' : failed, 'Successful' : successful } )
+
+  def __getSingleDirectorySize( self, path, recursive = False ):
+    """ Get the size of a single directory
+
+    :param self: self reference
+    :param str path: path on the storage
+    :returns S_OK( dictionary ) The dictionary contains Files : Number of files in the folder
+                                                        Size : Size of all files in the folder
+                                                        subDirs : Number of sub directories in the folder
+    """
+
+    res = self.__listSingleDirectory( path, recursive = recursive )
+    if not res['OK']:
+      return res
+
+    res = res['Value']
+
+    directorySize = 0
+    directoryFiles = 0
+
+    for file_dict in res['Files'].itervalues():
+      directorySize += file_dict['Size']
+      directoryFiles += 1
+
+    subDirectories = len( res['SubDirs'] )
+    return S_OK( { 'Files' : directoryFiles, 'Size' : directorySize, 'SubDirs' : subDirectories } )
