@@ -428,6 +428,17 @@ class HDFSStorage( StorageBase ):
     """
 
     self.log.debug( "HDFSStorage.__removeSingleFile: Attempting to remove file %s" % path )
+    res = self.__isSingleFile( path )
+    if not res['OK']:
+      errStr = "HDFSStorage.__removeSingleFile: Failed to check if path is file or not: %s" % res['Message']
+      self.log.error( errStr )
+      return S_ERROR( errStr )
+    
+    # if res['Value'] is file then path is not a file: abort
+    if not res['Value']:
+      errStr = "HDFSStorage.__removeSingleFile: path is not a file, aborting the operation."
+      self.log.error( errStr )
+      return S_ERROR( errStr )
 
     try:
       hdfs.rmr( path )
