@@ -1011,6 +1011,7 @@ class GFAL2_StorageBase( StorageBase ):
     metaDict['Directory'] = S_ISDIR( statInfo.st_mode )
 
     if metaDict['File'] :
+      metaDict['Type'] = 'File'
       metaDict['FileSerialNumber'] = statInfo.st_ino
       metaDict['Mode'] = statInfo.st_mode & ( S_IRWXU | S_IRWXG | S_IRWXO )
       metaDict['Links'] = statInfo.st_nlink
@@ -1024,6 +1025,7 @@ class GFAL2_StorageBase( StorageBase ):
       metaDict['Readable'] = bool( statInfo.st_mode & S_IRUSR )
       metaDict['Writeable'] = bool( statInfo.st_mode & S_IWUSR )
     elif metaDict['Directory']:
+      metaDict['Type'] = 'Directory'
       metaDict['Mode'] = statInfo.st_mode & ( S_IRWXU | S_IRWXG | S_IRWXO )
 
     return metaDict
@@ -1363,7 +1365,7 @@ class GFAL2_StorageBase( StorageBase ):
       else:
         receivedAllFiles = False
 
-    # recursion to get contents of sub directoryies
+    # recursion to get contents of sub directories
     receivedAllDirs = True
     self.log.debug( 'GFAL2_StorageBase.__getSingleDirectory: Trying to recursively download the %s directories' % len( subDirsDict ) )
     for subDir in subDirsDict:
@@ -1513,7 +1515,7 @@ class GFAL2_StorageBase( StorageBase ):
           self.log.debug( "GFAL2_StorageBase.removeDirectory: Successfully removed %s" % url )
           successful[url] = {'FilesRemoved':res['Value']['FilesRemoved'], 'SizeRemoved':res['Value']['SizeRemoved']}
         else:
-          self.log.error( "GFAL2_StorageBase.removeDirectory: Failed to remove entire directory.", path )
+          self.log.error( "GFAL2_StorageBase.removeDirectory: Failed to remove entire directory.", url )
           failed[url] = {'FilesRemoved':res['Value']['FilesRemoved'], 'SizeRemoved':res['Value']['SizeRemoved']}
       else:
         self.log.error( "GFAL2_StorageBase.removeDirectory: Completely failed to remove directory.", url )
@@ -1529,7 +1531,7 @@ class GFAL2_StorageBase( StorageBase ):
        :param path: pfn (srm://...) of a directory to remove
        :param recursive : if True, we recursively delete the subdir
        :returns: S_ERROR if there is a fatal error
-                  S_OK (statistics dictionary ) if we could upload something :
+                  S_OK (statistics dictionary ) if we could delete something :
                                     'AllRemoved': boolean of whether we could delete everything
                                     'FilesRemoved': amount of files deleted
                                     'SizeRemoved': amount of data deleted

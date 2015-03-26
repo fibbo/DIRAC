@@ -251,7 +251,7 @@ class HDFSStorage( StorageBase ):
       dest = dest_file
       
     try:
-      hdfs.cp( src_url, dest)
+      hdfs.get( src_url, dest )
     except IOError, e :
       if 'Cannot open file' in str( e ):
         errStr = "HDFSStorage.__getSingleFile: No access to create directory/file in destination."
@@ -879,6 +879,7 @@ class HDFSStorage( StorageBase ):
     
     # dest folder already exists, we have to do it the hard way and copy file by file
     if os.path.exists( dest ):
+      self.log.debug( "HDFSStorage.__getSingleDirectory" )
       receivedAllFiles = True
       for aFile in filesDict:
         res = self.__getSingleFile( aFile, dest + aFile[len( src_dir ):] )
