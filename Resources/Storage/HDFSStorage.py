@@ -893,8 +893,7 @@ class HDFSStorage( StorageBase ):
       else:
         allGot = False
 
-      resDict = { 'AllGot' : allGot, 'Files' : filesReceived, 'Size' : sizeReceived }
-      return S_OK( resDict )
+      return S_OK( { 'AllGot' : allGot, 'Files' : filesReceived, 'Size' : sizeReceived } )
 
     # directory doesn't exist, just get the whole folder with hdfs.get
     else:
