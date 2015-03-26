@@ -6,20 +6,15 @@
 """
 # # imports
 import os
-import datetime
-import errno
-import pydoop
 import pydoop.hdfs as hdfs
 
-from types import StringType
-from stat import S_ISREG, S_ISDIR, S_IXUSR, S_IRUSR, S_IWUSR, \
-  S_IRWXG, S_IRWXU, S_IRWXO
+
+from stat import S_IXUSR, S_IRUSR, S_IWUSR
 # # from DIRAC
-from DIRAC import gLogger, gConfig, S_OK, S_ERROR
+from DIRAC import gLogger, S_OK, S_ERROR
 from DIRAC.Resources.Utilities import checkArgumentFormat
 from DIRAC.Resources.Storage.StorageBase import StorageBase
 from DIRAC.Core.Utilities.File import getSize
-from rexec import FileDelegate
 
 
 
@@ -236,9 +231,13 @@ class HDFSStorage( StorageBase ):
     :return S_ERROR( error message ) in case of an error
             S_OK( file size ) if copying is successful
     """
+    # check if destination file already exists, if yes we remove it first
+    if os.path.exists( dest_file ):
+      self.log.debug( "HDFSStorage.__getSingleFile: Local file already exists %s. Removing..." % dest_file )
+      os.remove( dest_file )
+
 
     res = self.__getSingeFileSize( src_url )
-
     if not res['OK']:
       errStr = "HDFSStorage.__getSingleFile: Error while determinig file size: %s" % res['Message']
       self.log.error( errStr )
@@ -271,7 +270,7 @@ class HDFSStorage( StorageBase ):
     if destSize == remoteSize:
       return S_OK( remoteSize )
     else:
-      errStr = "HDFSStorage.__getSingleFile: File sizes don't match. Something went wrong, removing local file %s" % dest_file
+      errStr = "HDFSStorage.__getSingleFile: File sizes don't match (remote: %s vs dest: %s). Something went wrong, removing local file %s" % ( remoteSize, destSize, dest_file )
       if os.path.exists( dest_file ):
         os.remove( dest_file )
       return S_ERROR( errStr )
@@ -787,11 +786,135 @@ class HDFSStorage( StorageBase ):
     return S_OK( { 'AllPut' : allSuccessful, 'Files' : filesPut, 'Size' : sizePut } )
 
 
-  def getDirectory( self, *parms, **kws ):
-    """Put a local directory to the physical storage together with all its
+  def getDirectory( self, path, localPath = False ):
+    """Get locally a directory from the physical storage together with all its
        files and subdirectories.
+
+    :param self: self reference
+    :param str path: directory to download
+    :param str localPath: we can specify where we want to download the directory to. Otherwise
+                          it takes the current working directory
+
+    :returns successful dict per directory    'Files' : number of files downloaded
+                                              'Size' : amount of data downloaded
+             failed dict                      with the error message per directory
+             S_ERROR in case of an error
     """
-    return S_ERROR( "Storage.putDirectory: implement me!" )
+
+    res = checkArgumentFormat( path )
+    if not res['OK']:
+      return res
+    urls = res['Value']
+
+    self.log.debug( "HDFSStorage.getDirectory: Attempting to download %s directories." % len( urls ) )
+
+    successful = {}
+    failed = {}
+
+    for src_dir in urls:
+      dirName = os.path.basename( src_dir )
+      if localPath:
+        dest_dir = '%s/%s' % ( localPath, dirName )
+      else:
+        dest_dir = '%s/%s' % ( os.getcwd(), dirName )
+
+      res = self.__getSingleDirectory( src_dir, dest_dir )
+
+      if res['OK']:
+        if res['Value']['AllGot']:
+          self.log.debug( "HDFSStorage.getDirectory: Successfully got local copy of %s" % src_dir )
+          successful[src_dir] = { 'Files' : res['Value']['Files'], 'Size' : res['Value']['Size'] }
+        else:
+          self.log.error( "HDFSStorage.getDirectory: Failed to get entire directory.", src_dir )
+          failed[src_dir] = { 'Files' : res['Value']['Files'], 'Size' : res['Value']['Size'] }
+      else:
+        self.log.error( "HDFSStorage.getDirectory: Completely failed to get the directory.", src_dir )
+        failed[src_dir] = { 'Files' : 0, 'Size' : 0 }
+
+    return S_OK( {'Failed' : failed, 'Successful' : successful} )
+
+  def __getSingleDirectory( self, src_dir, dest_dir ):
+    """ Download a single directory with all its sub directories and files
+
+    :param self: self reference
+    :param str src_dir: source directory we want to download
+    :param str dest_dir: destination directory were we want to put src_dir
+    :returns S_ERROR in case of an error
+             S_OK if we could download something:
+                   'AllGot' : boolean whether or not we could download everything
+                   'Files'  : number of files downloaded
+                   'Size'   : amount of data downloaded
+    """
+
+    self.log.debug( "HDFSStorage.__getSingleDirectory: Attempting to download %s at %s" % ( src_dir, dest_dir ) )
+
+    filesReceived = 0
+    sizeReceived = 0
+
+    # is the source even a directory?
+    res = self.__isSingleDirectory( src_dir )
+    if not res['OK']:
+      errStr = "HDFSStorage.__getSingleDirectory: Failed to find the source directory."
+      self.log.error( errStr, res['Message'] )
+      return S_ERROR( errStr )
+    if not res['Value']:
+      errStr = "HDFSStorage.__getSingleDirectory: Path is not a directory."
+      self.log.error( errStr, src_dir )
+      return S_ERROR( errStr )
+
+    # listing directory for the return statistic like size, number of files
+    res = self.__listSingleDirectory( src_dir, True )
+    if not res['OK']:
+      errStr = "HDFSStorage.__getSingleDirectory: Failed to list source directory."
+      self.log.error( errStr, src_dir )
+      return S_ERROR( errStr )
+    res = res['Value']
+    filesDict = res['Files']
+
+
+    # so we can construct the proper path for .__getSingleFile
+    if src_dir.endswith( '/' ):
+      src_dir = src_dir[:-1]
+    dest = dest_dir + os.path.basename( src_dir )
+    
+    # dest folder already exists, we have to do it the hard way and copy file by file
+    if os.path.exists( dest ):
+      receivedAllFiles = True
+      for aFile in filesDict:
+        res = self.__getSingleFile( aFile, dest + aFile[len( src_dir ):] )
+        if res['OK']:
+          filesReceived += 1
+          sizeReceived += res['Value']
+        else:
+          receivedAllFiles = False
+      # if receivedAllFiles:
+      if receivedAllFiles:
+        allGot = True
+      else:
+        allGot = False
+
+      resDict = { 'AllGot' : allGot, 'Files' : filesReceived, 'Size' : sizeReceived }
+      return S_OK( resDict )
+
+    # directory doesn't exist, just get the whole folder with hdfs.get
+    else:
+      try:
+        hdfs.get(src_dir, dest_dir)
+      except IOError, e:
+        errStr = "HDFSStorage.__getSingleDirectory: Error while downloading directory %s." % src_dir
+        self.log.error( errStr, e )
+        return S_ERROR( errStr )
+      
+      for afile in filesDict.itervalues():
+        sizeReceived += afile['Size']
+
+      filesReceived = len( filesDict )  
+
+      allGot = True
+
+      return S_OK( { 'AllGot' : allGot, 'Files' : filesReceived, 'Size' : sizeReceived } )
+        
+
 
   def createDirectory( self, path ):
     """ Make a new directory on the physical storage
