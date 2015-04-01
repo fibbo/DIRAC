@@ -279,6 +279,13 @@ class HDFSStorage( StorageBase ):
   def putFile( self, path ):
     """Put a copy of the local file to the current directory on the
        physical storage
+
+       :param self: self reference:
+       :param dict path { str lfn : str localFile }
+       :returns S_OK with
+                           successful dict { path : size }
+                           failed dicht    { path : error message }
+                S_ERROR in case of argument problems
     """
     res = checkArgumentFormat( path )
     if not res['OK']:
@@ -296,7 +303,7 @@ class HDFSStorage( StorageBase ):
         self.log.error( errStr )
         return S_ERROR( errStr )
 
-      res = self.__putSingleFile()
+      res = self.__putSingleFile( src_file, dest_url )
 
       if res['OK']:
         successful[dest_url] = res['Value']
