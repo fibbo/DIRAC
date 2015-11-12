@@ -38,7 +38,7 @@ class GFAL2_StorageBase( StorageBase ):
     :param dict parameters: storage parameters
     """
 
-    StorageBase.__init__( self, storageName, parameters )
+    super( GFAL2_StorageBase, self ).__init__( storageName, parameters )
 
     self.log = gLogger.getSubLogger( "GFAL2_StorageBase", True )
 
@@ -1810,6 +1810,6 @@ class GFAL2_StorageBase( StorageBase ):
         return S_ERROR( errStr )
       else:
         errStr = 'GFAL2_StorageBase._getExtendedAttributes: Something went wrong while checking for extended attributes. Please see error log for more information.'
-        self.log.error( errStr, e.message )
+        self.log.error( errStr, ( path, e.message ) )
         return S_ERROR( errStr )
 
